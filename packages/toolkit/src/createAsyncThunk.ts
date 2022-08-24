@@ -145,7 +145,9 @@ type GetThunkAPI<ThunkApiConfig> = BaseThunkAPI<
   GetRejectValue<ThunkApiConfig>,
   GetRejectedMeta<ThunkApiConfig>,
   GetFulfilledMeta<ThunkApiConfig>
->
+> & {
+  type: string;
+}
 
 type GetRejectValue<ThunkApiConfig> = ThunkApiConfig extends {
   rejectValue: infer RejectValue
@@ -295,6 +297,12 @@ export type AsyncThunkOptions<
    * @default `false`
    */
   dispatchConditionRejection?: boolean
+
+  /**
+   * Real middlewares to apply on specific thunk. 
+   * 
+   */
+  middlewares?: { (arg: ThunkArg, api: Pick<GetThunkAPI<ThunkApiConfig>, 'getState' | 'extra' | 'dispatch'>): MaybePromise<boolean | undefined> }[];
 
   serializeError?: (x: unknown) => GetSerializedErrorType<ThunkApiConfig>
 
@@ -583,6 +591,15 @@ If you want to use the AbortController to react to \`abort\` events, please cons
         let finalAction: ReturnType<typeof fulfilled | typeof rejected>
         try {
           let conditionResult = options?.condition?.(arg, { getState, extra })
+
+          if (options?.middlewares !== undefined) {
+            for (let i = 0; i < options.middlewares.length; i++) {
+              if (conditionResult !== false) {
+                conditionResult = options?.middlewares?.[i]?.(arg, { dispatch, getState, extra })
+              }
+            }
+          }
+
           if (isThenable(conditionResult)) {
             conditionResult = await conditionResult
           }
@@ -601,6 +618,18 @@ If you want to use the AbortController to react to \`abort\` events, please cons
               options?.getPendingMeta?.({ requestId, arg }, { getState, extra })
             )
           )
+
+          let type = null
+
+          if (typeof arg === 'object') {
+            const argWithoutExtra: any = { ...arg }
+            delete argWithoutExtra?.extra
+            const argSorted = Object.fromEntries(Object.entries(argWithoutExtra as any).sort())
+            type = JSON.stringify({ ...{ type: typePrefix }, ...argSorted })
+          } else {
+            type = JSON.stringify({ type: typePrefix });
+          }
+
           finalAction = await Promise.race([
             abortedPromise,
             Promise.resolve(
@@ -610,6 +639,7 @@ If you want to use the AbortController to react to \`abort\` events, please cons
                 extra,
                 requestId,
                 signal: abortController.signal,
+                type,
                 rejectWithValue: ((
                   value: RejectedValue,
                   meta?: RejectedMeta
